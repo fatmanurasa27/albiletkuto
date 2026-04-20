@@ -3,13 +3,14 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import create_engine, Column, Integer, String, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from confluent_kafka import Producer
+from kafka import KafkaProducer
 import json
 
 # --- 1. AYARLAR ---
-DATABASE_URL = "postgresql://kuto_user:kuto_password@postgres:5432/albiletkuto_db"
-KAFKA_BROKER = "kafka:29092"
-KAFKA_TOPIC = "ticket_events"
+# DİKKAT: Veritabanı adını dün gece düzelttiğimiz şekliyle sabitledim.
+DATABASE_URL = "postgresql://kuto_user:kuto_password@postgres:5432/albilet_db"
+KAFKA_BROKER = "kafka:9092"
+KAFKA_TOPIC = "bilet_bildirim"
 
 # --- 2. VERİTABANI TABLOSU ---
 engine = create_engine(DATABASE_URL)
@@ -28,15 +29,15 @@ class Ticket(Base):
 Base.metadata.create_all(bind=engine)
 
 # --- 3. KAFKA PRODUCER (Mesaj Gönderici) AYARLARI ---
-producer_conf = {'bootstrap.servers': KAFKA_BROKER}
-producer = Producer(producer_conf)
-
-# Mesajın gidip gitmediğini terminale yazdıran yardımcı fonksiyon
-def delivery_report(err, msg):
-    if err is not None:
-        print(f"❌ Mesaj Kafka'ya iletilemedi: {err}")
-    else:
-        print(f"✅ Mesaj Kafka'ya uçtu! Topic: {msg.topic()}, Partition: {msg.partition()}")
+try:
+    producer = KafkaProducer(
+        bootstrap_servers=[KAFKA_BROKER],
+        value_serializer=lambda v: json.dumps(v).encode('utf-8')
+    )
+    print("✅ Kafka Producer başarıyla bağlandı! Telsiz hazır.", flush=True)
+except Exception as e:
+    print(f"❌ Kafka bağlantı hatası: {e}", flush=True)
+    producer = None
 
 # --- 4. ŞEMALAR ---
 class BookingRequest(BaseModel):
@@ -68,24 +69,20 @@ def create_booking(request: BookingRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_ticket)
 
-    # 2. Kafka'ya Gönderilecek Etkinlik (Event) Mesajını Hazırla
-    event_data = {
-        "ticket_id": new_ticket.id,
-        "user_email": new_ticket.user_email,
-        "price": new_ticket.price,
-        "status": "PAYMENT_REQUIRED"
-    }
-    
-    # 3. Mesajı Kafka'ya fırlat!
-    producer.produce(
-        KAFKA_TOPIC,
-        key=str(new_ticket.id),
-        value=json.dumps(event_data),
-        callback=delivery_report
-    )
-    producer.flush() # Mesajın kesin gittiğinden emin olana kadar bekle
+    # 2. Bildirim Servisine Gidecek "Telsiz Anonsunu" Hazırla
+    if producer:
+        try:
+            mesaj = {
+                "nereden": "Albilet Merkezi",
+                "nereye": request.user_email,
+                "fiyat": request.price
+            }
+            producer.send(KAFKA_TOPIC, mesaj)
+            producer.flush() # Mesajın kesin gittiğinden emin olana kadar bekle
+        except Exception as e:
+            print(f"❌ Bildirim anonsu yapılamadı: {e}", flush=True)
 
     return {
-        "message": "Bilet başarıyla ayrıldı, ödeme adımına geçiliyor...", 
-        "ticket_details": event_data
+        "message": "Bilet başarıyla ayrıldı ve Kafka'ya anons geçildi!", 
+        "ticket_details": {"id": new_ticket.id, "email": new_ticket.user_email}
     }

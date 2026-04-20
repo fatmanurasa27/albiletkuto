@@ -5,7 +5,7 @@ import json
 import time
 
 # --- 1. KAFKA AYARLARI ---
-KAFKA_BROKER = "kafka:29092"
+KAFKA_BROKER = "kafka:9092"
 CONSUMER_GROUP = "payment_group"
 IN_TOPIC = "ticket_events"     # Booking'den gelen mesajları dinleyeceğimiz kanal
 OUT_TOPIC = "payment_events"   # Ödeme bitince Bildirim servisine bağıracağımız kanal
